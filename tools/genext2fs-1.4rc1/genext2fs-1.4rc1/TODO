@@ -1,0 +1,14 @@
+Disclaimer: I'll probably never do all this ...
+
+- support fancy ext2 options
+- support ext3
+
+- add tar.gz extraction capabilities ?
+
+- find a better way to guess filesystem's size
+
+- UUID generation
+- confirm 8192 blocks-per-group upper limit for rev 0 filesystems
+  and increase if possible (bigger would be more space efficient)
+- align the first block of the in-memory image with a VM page boundary to make
+  it more efficient to build a large filesystem in swap.

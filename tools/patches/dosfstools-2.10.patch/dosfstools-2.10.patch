@@ -1,0 +1,82 @@
+diff -burN dosfstools-2.10.orig/dosfsck/common.h dosfstools-2.10/dosfsck/common.h
+--- dosfstools-2.10.orig/dosfsck/common.h	1998-04-28 06:14:25.000000000 -0500
++++ dosfstools-2.10/dosfsck/common.h	2005-09-30 15:42:47.813312960 -0500
+@@ -5,6 +5,13 @@
+ 
+ #ifndef _COMMON_H
+ #define _COMMON_H
++#include <linux/version.h>
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 0)
++       #define __KERNEL__
++       #include <asm/types.h>
++       #undef __KERNEL__
++       #define MSDOS_FAT12 4084 /* maximum number of clusters in a 12 bit FAT */
++#endif
+ 
+ void die(char *msg,...) __attribute((noreturn));
+ 
+diff -burN dosfstools-2.10.orig/dosfsck/dosfsck.h dosfstools-2.10/dosfsck/dosfsck.h
+--- dosfstools-2.10.orig/dosfsck/dosfsck.h	2003-06-14 15:03:20.000000000 -0500
++++ dosfstools-2.10/dosfsck/dosfsck.h	2005-09-30 15:43:27.345303184 -0500
+@@ -13,6 +13,14 @@
+ #define _LINUX_STAT_H		/* hack to avoid inclusion of <linux/stat.h> */
+ #define _LINUX_STRING_H_	/* hack to avoid inclusion of <linux/string.h>*/
+ #define _LINUX_FS_H             /* hack to avoid inclusion of <linux/fs.h> */
++#include <linux/version.h>
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 0)
++       #define __KERNEL__
++       #include <asm/types.h>
++       #include <asm/byteorder.h>
++       #undef __KERNEL__
++#endif
++
+ #include <linux/msdos_fs.h>
+ 
+ /* 2.1 kernels use le16_to_cpu() type functions for CF_LE_W & Co., but don't
+diff -burN dosfstools-2.10.orig/dosfsck/file.c dosfstools-2.10/dosfsck/file.c
+--- dosfstools-2.10.orig/dosfsck/file.c	2003-06-14 15:03:20.000000000 -0500
++++ dosfstools-2.10/dosfsck/file.c	2005-09-30 15:43:59.376433712 -0500
+@@ -15,6 +15,13 @@
+ #define _LINUX_STAT_H		/* hack to avoid inclusion of <linux/stat.h> */
+ #define _LINUX_STRING_H_	/* hack to avoid inclusion of <linux/string.h>*/
+ #define _LINUX_FS_H             /* hack to avoid inclusion of <linux/fs.h> */
++#include <linux/version.h>
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 0)
++       #define __KERNEL__
++       #include <asm/types.h>
++       #undef __KERNEL__
++#endif
++
+ #include <linux/msdos_fs.h>
+ 
+ #include "common.h"
+diff -burN dosfstools-2.10.orig/mkdosfs/mkdosfs.c dosfstools-2.10/mkdosfs/mkdosfs.c
+--- dosfstools-2.10.orig/mkdosfs/mkdosfs.c	2003-06-14 15:07:08.000000000 -0500
++++ dosfstools-2.10/mkdosfs/mkdosfs.c	2005-09-30 15:46:26.800021920 -0500
+@@ -65,6 +65,13 @@
+ #include <unistd.h>
+ #include <time.h>
+ #include <errno.h>
++#include <linux/version.h>
++
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 0)
++       #define __KERNEL__
++       #include <asm/types.h>
++       #undef __KERNEL__
++#endif
+ 
+ #if __BYTE_ORDER == __BIG_ENDIAN
+ 
+@@ -698,6 +705,12 @@
+ 	      goto floppy_default;
+ 	}
+     }
++    else if ((device_num & 0xff00) == 0x0100) /* This is a ram disk */
++    {
++      bs.secs_track = CT_LE_W(32); /* these are fake values... */
++      bs.heads = CT_LE_W(64);
++      goto def_hd_params;
++    }
+   else if ((device_num & 0xff00) == 0x0700) /* This is a loop device */
+     {
+       /* Can we get the loop geometry? This is in 512 byte blocks, always? */

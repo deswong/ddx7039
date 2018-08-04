@@ -1,0 +1,480 @@
+diff -burN alsa-utils-1.0.9.orig/aplay/aplay.c alsa-utils-1.0.9/aplay/aplay.c
+--- alsa-utils-1.0.9.orig/aplay/aplay.c	2005-11-11 14:27:25.113166176 +0800
++++ alsa-utils-1.0.9/aplay/aplay.c	2005-11-11 14:35:10.195462920 +0800
+@@ -43,10 +43,22 @@
+ #include <sys/uio.h>
+ #include <sys/time.h>
+ #include <sys/signal.h>
++#include <sys/types.h>
++#include <sys/ipc.h>
++#include <sys/sem.h>
++#include <sys/shm.h>
++#include <sys/wait.h>
+ #include "aconfig.h"
+ #include "formats.h"
+ #include "version.h"
+ 
++/* globals */
++int forked;
++pid_t pid;
++
++/* prototype */
++void clean_sems(void);
++
+ #ifndef LLONG_MAX
+ #define LLONG_MAX    9223372036854775807LL
+ #endif
+@@ -302,6 +314,14 @@
+ 	if (stream == SND_PCM_STREAM_CAPTURE) {
+ 		fmt_rec_table[file_type].end(fd);
+ 		stream = -1;
++		kill(pid,9);
++		clean_sems();
++	}
++	if (stream == SND_PCM_STREAM_PLAYBACK) {
++		stream = -1;
++		kill(pid,9);
++		clean_sems();
++		snd_pcm_drain(handle);
+ 	}
+ 	if (fd > 1) {
+ 		close(fd);
+@@ -1546,7 +1566,8 @@
+ 			case 8:	/* the extension to play Stereo, I have SB 1.0 :-( */
+ 				was_extended = 1;
+ 				eb = (VocExtBlock *) data;
+-				COUNT1(sizeof(VocExtBlock));
++				/* remove this line for voc stereo */
++				/* COUNT1(sizeof(VocExtBlock)); */
+ 				hwparams.rate = (int) (eb->tc);
+ 				hwparams.rate = 256000000L / (65536 - hwparams.rate);
+ 				hwparams.channels = eb->mode == VOC_MODE_STEREO ? 2 : 1;
+@@ -1849,83 +1870,374 @@
+ 	}
+ }
+ 
+-/* playing raw data */
++#if defined (__GLIBC_LIBRARY__) && ! defined (_SEM_SEMUN_UNDEFINED)
++/* union semun is defined by including <sys/sem.h> */
++#else
++/* according to X/OPEN defined it as follow */
++union semun
++{
++	int val;			/* value for SETVAL */
++	struct semid_ds *buf;		/* buffer for IPC_STAT & IPC_SET */
++	unsigned short int *array;	/* array for GETALL & SETALL */
++	struct seminfo *__buf;		/* buffer for IPC_INFO */
++};
++#endif
+ 
+-void playback_go(int fd, size_t loaded, off64_t count, int rtype, char *name)
++/* period information for buffer */
++typedef struct period_inf_t
+ {
+-	int l, r;
+-	off64_t written = 0;
+-	off64_t c;
++	size_t count;	/* How many bytes in this buffer */
++	size_t last;	/* Should we terminate after this period? */
++} period_inf;
+ 
+-	header(rtype, name);
+-	set_params();
++/* The default parameter of shared memory */
++#define DEFAULT_TOTAL_BUFFER_SIZE		0x100000
++#define DEFAULT_TOTAL_BUFFER_NUMBER		0x200
+ 
+-	while (loaded > chunk_bytes && written < count) {
+-		if (pcm_write(audiobuf + written, chunk_size) <= 0)
+-			return;
+-		written += chunk_bytes;
+-		loaded -= chunk_bytes;
++/* The default number of semaphore blocks */
++#define SEM_SELECTION			0x20
++
++/* Statice value */
++static size_t total_buf_size = DEFAULT_TOTAL_BUFFER_SIZE;
++static size_t total_buf_num = DEFAULT_TOTAL_BUFFER_NUMBER;
++static size_t sem_set_num = DEFAULT_TOTAL_BUFFER_NUMBER/SEM_SELECTION;
++
++/* Static value for shared memory */
++static int mem_shmid, ctl_shmid;
++static int *disk_semid, *snd_semid;
++static char **buff_addr;
++
++static char * mem_addr;
++static period_inf *period_ctl;
++
++/* init_shm */
++void init_shm(size_t period_bytes)
++{
++	int i;
++
++	/* caculate the total shared memory size */
++	total_buf_size = total_buf_num * period_bytes;
++
++	/* create, attach and mark for death the total buffer */
++	mem_shmid = shmget(IPC_PRIVATE, total_buf_size, 
++		IPC_EXCL | IPC_CREAT | 0600);
++	if (mem_shmid == -1)
++		error("shmget");
++
++	mem_addr = shmat(mem_shmid, IPC_RMID, SHM_RND);
++	if (mem_addr == (char*)-1)
++	{
++		error("shmat");
++		if(shmctl(mem_shmid, IPC_RMID, NULL))
++			error("shmctl");
++		exit(-1);
+ 	}
+-	if (written > 0 && loaded > 0)
+-		memmove(audiobuf, audiobuf + written, loaded);
+ 
+-	l = loaded;
+-	while (written < count) {
+-		do {
+-			c = count - written;
+-			if (c > chunk_bytes)
+-				c = chunk_bytes;
+-			c -= l;
++	if(shmctl(mem_shmid, IPC_RMID, NULL))
++		error("shmctl");
+ 
+-			if (c == 0)
+-				break;
+-			r = safe_read(fd, audiobuf + l, c);
+-			if (r < 0) {
+-				perror(name);
+-				exit(EXIT_FAILURE);
++	/* Create an array of pointers. Point them at equally spaced
++	 * chunks in the main buffer, to give lots of smaller buffers
++	 */
++	buff_addr = (char**)malloc(total_buf_num * sizeof(char*));
++	for(i=0; i<total_buf_num; i++)
++		buff_addr[i] = mem_addr + i * period_bytes;
++
++	/* Create a small amount of shared memory 
++	 * to hold the info for each period.
++	 */
++	ctl_shmid = shmget(IPC_PRIVATE, total_buf_num*sizeof(period_inf),
++		IPC_EXCL | IPC_CREAT | 0600);
++	if (ctl_shmid == -1){
++		error("shmget");
++	}
++	period_ctl = (period_inf*)shmat(ctl_shmid, IPC_RMID, SHM_RND);
++	if (period_ctl == (period_inf*)((char*)-1))
++	{
++		error("shmat");
++		if(shmctl(ctl_shmid, IPC_RMID, NULL))
++			error("shmctl");
++		exit(-1);
++	}
++	if(shmctl(ctl_shmid, IPC_RMID, NULL))
++		error("shmctl");
++
++	if ((disk_semid = (int*)malloc(sizeof(int)*sem_set_num)) == NULL){
++		error("malloc");
++	}
++	if ((snd_semid = (int*)malloc(sizeof(int)*sem_set_num)) == NULL){
++		error("malloc");
++	}
++	
++	/* Create the semaphores */
++	for (i=0;i<sem_set_num;i++)
++	{
++		if ((disk_semid[i] = semget(IPC_PRIVATE, SEM_SELECTION,
++			IPC_EXCL | IPC_CREAT | 0600)) == -1)
++			error("semget error");
++		if ((snd_semid[i] = semget(IPC_PRIVATE, SEM_SELECTION,
++			IPC_EXCL | IPC_CREAT | 0600)) == -1)
++			error("semget");
+ 			}
+-			fdcount += r;
+-			if (r == 0)
+-				break;
+-			l += r;
+-		} while (sleep_min == 0 && (size_t)l < chunk_bytes);
+-		l = l * 8 / bits_per_frame;
+-		r = pcm_write(audiobuf, l);
+-		if (r != l)
++	
++	/* Catch some signals, so we clean up semaphores */
++	signal(SIGINT, signal_handler);
++}
++
++/* Init the semaphore queue */
++void init_sems(int disks, int snds)
++{
++	int i,j;
++	union semun dsu, ssu;
++
++	dsu.val = disks;
++	ssu.val = snds;
++	
++	for (j=0;j<sem_set_num;j++)
++	{
++		for (i=0;i<SEM_SELECTION;i++)
++		{
++			if(semctl(disk_semid[j], i, SETVAL, dsu) == -1)
++				error("semctl");
++			if(semctl(snd_semid[j], i, SETVAL, ssu) == -1)
++				error("semctl");
++		}
++	}
++}
++	
++void clean_sems(void)
++{
++    int i;
++    union semun s;
++
++    s.val = 0;
++
++    for (i = 0; i < sem_set_num; i++)
++    {
++	semctl(disk_semid[i], 0, IPC_RMID, s);
++	semctl(snd_semid[i], 0, IPC_RMID, s);
++    }
++}
++
++/* Does an up on the appropriate semaphore */
++void up(int *semblk, int xsemnum)
++{
++	struct sembuf sbuf;
++
++	sbuf.sem_num = xsemnum%SEM_SELECTION;
++	sbuf.sem_op = 1;
++	sbuf.sem_flg = 0;
++
++	if (semop(semblk[xsemnum/SEM_SELECTION], &sbuf, 1) == -1)
++		perror("semop");
++}
++
++/* Does a down on the appropriate semaphore */
++void down(int *semblk, int xsemnum)
++{
++	struct sembuf sbuf;
++
++	sbuf.sem_num = xsemnum%SEM_SELECTION;
++	sbuf.sem_op = -1;
++	sbuf.sem_flg = 0;
++
++	if (semop(semblk[xsemnum/SEM_SELECTION], &sbuf, 1) == -1)
++		perror("semop");
++}
++
++/* playing raw data */
++
++void playback_go(int fd, size_t loaded, off64_t played, int rtype, char *name)
++{
++	header(rtype, name);
++	set_params();
++
++	/* Set up the shared buffers and semaphore blocks */
++	init_shm(chunk_bytes);
++	init_sems(1, 0);
++
++	pid = fork();
++	if (pid == 0)
++	{
++		int cbuff = 0;
++		
++		/* Uncatch the signals */
++		signal(SIGINT, SIG_DFL);
++
++		while(1)
++		{
++			ssize_t count, trgt;
++			char *tmpptr;
++
++			/* Grab the buffer. Blocks till it is OK to do so. */
++			down(snd_semid, cbuff);
++			/* Spit it out */
++			tmpptr = buff_addr[cbuff];
++			trgt = period_ctl[cbuff].count;
++			
++			trgt = trgt * 8 / bits_per_frame;
++			count = pcm_write(tmpptr, trgt);
++
++			/* Mark the buffer as clean */
++			up(disk_semid, cbuff);
++			/* If the block was marked as the last one, stop */
++			if (period_ctl[cbuff].last)
++				break;
++			/* Advance the pointer */
++			cbuff++;
++			cbuff %= total_buf_num;
++		}
++		/* Tidy up and exit, we are being waited for */
++		exit(0);
++	}
++	else
++	{
++		int cbuff = 0;
++		off64_t totalpl = played;
++
++		while(1)
++		{
++			ssize_t count, numwr;
++			char *tmpptr;
++
++			totalpl -= chunk_bytes;
++			count = (totalpl < chunk_bytes) ? totalpl : chunk_bytes;
++
++			/* Grab the buffer. Blocks till it is OK to do so. */
++			down(disk_semid, cbuff);
++			
++			tmpptr = buff_addr[cbuff];
++			if((read(fd, tmpptr, count)) != chunk_bytes)
++			{
++				period_ctl[cbuff].count = count;
++				period_ctl[cbuff].last = 1;
++				/* Mark the buffer as clean */
++				up(snd_semid, cbuff);
+ 			break;
+-		r = r * bits_per_frame / 8;
+-		written += r;
+-		l = 0;
+ 	}
++			else
++			{
++				period_ctl[cbuff].count = count;
++				period_ctl[cbuff].last = 0;
++			}
++
++			/* Mark the buffer as clean */
++			up(snd_semid, cbuff);
++			/* Advance the pointer */
++			cbuff++;
++			cbuff %= total_buf_num;
++		}
++		/* Tidy up and wait for the child */
++		wait(NULL);
++
++		/* Free all the semaphores */
++		clean_sems();
+ 	snd_pcm_drain(handle);
++	}	
+ }
+ 
+ /* capturing raw data, this proc handels WAVE files and .VOCs (as one block) */
+ 
+-void capture_go(int fd, off64_t count, int rtype, char *name)
++void capture_go(int fd, off64_t recorded, int rtype, char *name)
+ {
+-	size_t c;
+-	off64_t cur;
+-	ssize_t r, err;
+-
+ 	header(rtype, name);
+ 	set_params();
+ 
+-	do {
+-		for (cur = count; cur > 0; cur -= r) {
+-			c = (cur <= chunk_bytes) ? cur : chunk_bytes;
+-			c = c * 8 / bits_per_frame;
+-			if ((size_t)(r = pcm_read(audiobuf, c)) != c)
++	init_shm(chunk_bytes);
++	init_sems(0, 1);
++	sync();
++
++	pid = fork();
++	if (pid == 0)
++	{
++		int cbuff = 0;
++
++		/* Uncatch the signals */
++		signal(SIGINT, SIG_DFL);
++
++		/* Child process writes the disk */
++		while(1)
++		{
++			int count, numwr, trgt;
++			char *tmpptr;
++
++			/* Grab the buffer. Blocks till it is OK to do so. */
++			down(disk_semid, cbuff);
++			/* Spit it out */
++			tmpptr = buff_addr[cbuff];
++			numwr = 0;
++			trgt = period_ctl[cbuff].count;
++			while ( (numwr < trgt) &&
++			((count = write(fd, tmpptr, trgt - numwr)) > 0) )
++			{
++				numwr += count;
++				tmpptr += count;
++			}
++			/* Mark the buffer as clean */
++			up(snd_semid, cbuff);
++			/* If the block was marked as the last one, stop */
++			if (period_ctl[cbuff].last)
++				break;
++			/* Advance the pointer */
++			cbuff++;
++			cbuff %= total_buf_num;
++		}
++		/* Tidy up and exit, we are being waited for */
++		exit(0);
++	}
++	else
++	{
++		/* Parent reads audio */
++		int cbuff = 0;
++		ssize_t totalrd = 0;
++
++		while (totalrd <= recorded)
++		{
++			ssize_t trgt, count, r;
++			char *tmpptr;
++			trgt = recorded - totalrd;
++			trgt = (trgt <= chunk_bytes) ? trgt : chunk_bytes;
++			count = trgt * 8 / bits_per_frame;
++
++			/* Get the buffer. Blocks until OK to do so */
++			down(snd_semid, cbuff);
++			tmpptr = buff_addr[cbuff];
++			
++			/* Read a block of data */
++			if ((size_t)(r = pcm_read(tmpptr, count)) != count)
++			{
++				period_ctl[cbuff].count = r;
++				period_ctl[cbuff].last = 1;
++				up(disk_semid, cbuff);
+ 				break;
++			}
++			
++			/* Update the count for this block */
+ 			r = r * bits_per_frame / 8;
+-			if ((err = write(fd, audiobuf, r)) != r) {
+-				perror(name);
+-				exit(EXIT_FAILURE);
++			period_ctl[cbuff].count = r;
++			/* Update the amount done */
++			totalrd += r;
++			fdcount += r;
++
++			/* Tell the reader to stop if needed */
++			if (totalrd >= recorded)
++			{
++				period_ctl[cbuff].last = 1;
++				up(disk_semid, cbuff);
++				break;
++			}
++			/* Mark the buffer dirty */
++			up(disk_semid, cbuff);
++			/* Update the counter */
++			cbuff++;
++			cbuff %= total_buf_num;
+ 			}
+-			if (err > 0)
+-				fdcount += err;
++		/* Tidy up and wait for the child */
++		wait(NULL);
++
++		/* Free all the semaphores */
++		clean_sems();
+ 		}
+-	} while (rtype == FORMAT_RAW && !timelimit);
+ }
+ 
+ /*

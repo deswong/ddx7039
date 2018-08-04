@@ -1,0 +1,230 @@
+diff -burN flnx-orig/src/Fl.cxx flnx/src/Fl.cxx
+--- flnx-orig/src/Fl.cxx	2003-08-08 06:18:39.000000000 +0900
++++ flnx/src/Fl.cxx	2006-11-16 17:19:36.000000000 +0900
+@@ -1,6 +1,6 @@
+ #include <stdio.h>
+ //
+-// "$Id: Fl.cxx,v 1.1.1.1 2003/08/07 21:18:39 jasonk Exp $"
++// "$Id: Fl.cxx,v 1.3 2006/11/16 08:19:36 m_hosoi Exp $"
+ //
+ // Main event handling code for the Fast Light Tool Kit (FLTK).
+ //
+@@ -35,6 +35,18 @@
+ // Globals...
+ //
+ 
++#define	__EXTENTION__
++#ifdef	__EXTENTION__
++
++#define		LEFT_EXT	( 2 )
++#define		RIGHT_EXT	( 4 )
++#define		UPPER_EXT	( 2 )
++#define		LOWER_EXT	( 4 )
++
++const int	WINDOW_OFFSET = 12;
++
++#endif	/*__EXTENTION__*/
++
+ Fl_Widget	*Fl::belowmouse_,
+ 		*Fl::pushed_,
+ 		*Fl::focus_,
+@@ -59,10 +71,17 @@
+ //
+ 
+ int Fl::event_inside(int x,int y,int w,int h) /*const*/ {
++#ifdef	__EXTENTION__
++  int mx = (event_x() + LEFT_EXT + WINDOW_OFFSET ) - x;
++  int my = (event_y() + UPPER_EXT) - y;
++
++  return (mx >= 0 && mx < (w+LEFT_EXT+RIGHT_EXT) && my >= 0 && my < (h+UPPER_EXT+LOWER_EXT));
++#else
+   int mx = event_x() - x;
+   int my = event_y() - y;
+ 
+   return (mx >= 0 && mx < w && my >= 0 && my < h);
++#endif	/*__EXTENTION__*/
+ }
+ 
+ int Fl::event_inside(const Fl_Widget *o) /*const*/ {
+@@ -779,5 +798,5 @@
+ }
+ 
+ //
+-// End of "$Id: Fl.cxx,v 1.1.1.1 2003/08/07 21:18:39 jasonk Exp $".
++// End of "$Id: Fl.cxx,v 1.3 2006/11/16 08:19:36 m_hosoi Exp $".
+ //
+diff -burN flnx-orig/src/Fl_Animator.cxx flnx/src/Fl_Animator.cxx
+--- flnx-orig/src/Fl_Animator.cxx	2003-08-08 06:18:39.000000000 +0900
++++ flnx/src/Fl_Animator.cxx	2007-01-24 19:34:44.000000000 +0900
+@@ -28,7 +28,7 @@
+ 
+ Fl_Animator::Fl_Animator(char * const *image, int X, int Y,
+ 			 int fcount, int fwidth, int fheight, 
+-			 int interval, const char *label = 0)
++			 int interval, const char *label)
+   : Fl_Widget(X,Y,fwidth,fheight,label)
+   
+ {
+diff -burN flnx-orig/src/Fl_Double_Window.cxx flnx/src/Fl_Double_Window.cxx
+--- flnx-orig/src/Fl_Double_Window.cxx	2003-08-08 06:18:40.000000000 +0900
++++ flnx/src/Fl_Double_Window.cxx	2006-10-02 11:30:43.000000000 +0900
+@@ -1,5 +1,5 @@
+ //
+-// "$Id: Fl_Double_Window.cxx,v 1.1.1.1 2003/08/07 21:18:40 jasonk Exp $"
++// "$Id: Fl_Double_Window.cxx,v 1.1.1.1 2006/10/02 02:30:43 s884640 Exp $"
+ //
+ // Double-buffered window code for the Fast Light Tool Kit (FLTK).
+ //
+@@ -22,6 +22,7 @@
+ //
+ // Please report all bugs and problems to "fltk-bugs@easysw.com".
+ //
++#include <stdio.h>
+ 
+ #include <config.h>
+ #include <FL/x.H>
+@@ -62,7 +63,7 @@
+ void Fl_Double_Window::show() {
+ #ifndef WIN32
+   if (!shown()) { // don't set the background pixel
+-    fl_open_display();
++//    fl_open_display();
+     Fl_X::make_xid(this);
+     return;
+   }
+@@ -106,66 +107,28 @@
+ void Fl_Double_Window::flush(int eraseoverlay) {
+   make_current(); // make sure fl_gc is non-zero
+   Fl_X *i = Fl_X::i(this);
++
++	/* x_id Žæ“¾ or ì¬	*/
+   if (!i->other_xid) {
+-#ifndef NANO_X
+-#if USE_XDBE
+-    if (can_xdbe()) i->other_xid =
+-      XdbeAllocateBackBufferName(fl_display, fl_xid(this), XdbeUndefined);
+-    else
+-#endif
+-#endif
+       i->other_xid = fl_create_offscreen(w(), h());
+     clear_damage(FL_DAMAGE_ALL);
+   }
+-#ifndef NANO_X
+-#if USE_XDBE
+-  if (use_xdbe) {
+-    // if this is true, copy rather than swap so back buffer is preserved:
+-    int copy = (i->region || eraseoverlay);
+-    if (i->backbuffer_bad) { // make sure we do a complete redraw...
+-      if (i->region) {XDestroyRegion(i->region); i->region = 0;}
+-      clear_damage(FL_DAMAGE_ALL);
+-    }
+-    if (damage()) {
+-      fl_clip_region(i->region); i->region = 0;
+-      fl_window = i->other_xid;
+-      draw();
+-      fl_window = i->xid;
+-    }
+-    if (!copy) {
+-      XdbeSwapInfo s;
+-      s.swap_window = fl_xid(this);
+-      s.swap_action = XdbeUndefined;
+-      XdbeSwapBuffers(fl_display, &s, 1);
+-      i->backbuffer_bad = 1;
+-      return;
+-    }
+-    // otherwise just use normal copy from back to front:
+-    i->backbuffer_bad = 0; // which won't destroy the back buffer...
+-  } else
+-#endif
+-#endif
+   if (damage() & ~FL_DAMAGE_EXPOSE) {
++
+     fl_clip_region(i->region); i->region = 0;
+-#ifdef WIN32
+-    HDC _sgc = fl_gc;
+-    fl_gc = fl_makeDC(i->other_xid);
+-    fl_restore_clip(); // duplicate region into new gc
+-    draw();
+-    DeleteDC(fl_gc);
+-    fl_gc = _sgc;
+-#else // X:
+     fl_window = i->other_xid;
++		GrClearWindow( fl_window, 0 );
+     draw();
+     fl_clip_region(0); // NANO_X
+     fl_window = i->xid;
+-#endif
+   }
+-  if (eraseoverlay) fl_clip_region(0);
+-  // on Irix (at least) it is faster to reduce the area copied to
+-  // the current clip region:
+-  int X,Y,W,H; fl_clip_box(0,0,w(),h(),X,Y,W,H);
+-  fl_copy_offscreen(X, Y, W, H, i->other_xid, X, Y);
++	if ( eraseoverlay ) {
++		fl_clip_region(0);
++	}
++	// on Irix (at least) it is faster to reduce the area copied to the current clip region:
++	int X,Y,W,H;
++	fl_clip_box(0, 0, w(), h(),X , Y, W, H);
++	fl_copy_offscreen( X, Y, W, H, i->other_xid, X, Y );
+ }
+ 
+ void Fl_Double_Window::resize(int X,int Y,int W,int H) {
+@@ -202,5 +165,5 @@
+ }
+ 
+ //
+-// End of "$Id: Fl_Double_Window.cxx,v 1.1.1.1 2003/08/07 21:18:40 jasonk Exp $".
++// End of "$Id: Fl_Double_Window.cxx,v 1.1.1.1 2006/10/02 02:30:43 s884640 Exp $".
+ //
+diff -burN flnx-orig/src/Fl_x.cxx flnx/src/Fl_x.cxx
+--- flnx-orig/src/Fl_x.cxx	2003-08-08 06:18:40.000000000 +0900
++++ flnx/src/Fl_x.cxx	2006-10-02 11:30:41.000000000 +0900
+@@ -1,5 +1,5 @@
+ //
+-// "$Id: Fl_x.cxx,v 1.1.1.1 2003/08/07 21:18:40 jasonk Exp $"
++// "$Id: Fl_x.cxx,v 1.1.1.1 2006/10/02 02:30:41 s884640 Exp $"
+ //
+ // X specific code for the Fast Light Tool Kit (FLTK).
+ //
+@@ -1014,7 +1014,6 @@
+ 
+     GR_WINDOW_ID wid;
+     wid = GrNewWindow (root, X, Y, W, H, 0, WHITE, BLACK);
+-
+     //printf("%d = GrNewWindow(%d)\n", wid, root);
+ 
+     if (mw_parent_top == 0) {
+@@ -1029,16 +1028,15 @@
+       mw_parent = 1;
+     }
+ 
++	props.props |= GR_WM_PROPS_NOBACKGROUND;
+     props.props |= w->wm_props;
+ 
+ 
+     GrSetWMProperties (wid, &props);
+-
+     Fl_X *x = set_xid (w, wid);
+ 
+     // Start up a MicrowWindow's select events as each window is created.
+     // This is related with the fl_wait() function above.
+-
+     if(root == GR_ROOT_WINDOW_ID) {
+ 
+       GrSelectEvents (wid, GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_BUTTON_UP |
+@@ -1060,7 +1058,6 @@
+     w->handle (FL_SHOW);	// get child windows to appear
+     w->redraw ();
+ 
+-
+     GrMapWindow (x->xid);
+     fl_window = x->xid;		//tanghao
+ 
+@@ -2343,5 +2340,5 @@
+ #endif
+ 
+ //
+-// End of "$Id: Fl_x.cxx,v 1.1.1.1 2003/08/07 21:18:40 jasonk Exp $".
++// End of "$Id: Fl_x.cxx,v 1.1.1.1 2006/10/02 02:30:41 s884640 Exp $".
+ 

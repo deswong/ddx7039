@@ -1,0 +1,21 @@
+diff -burN busybox-1.00.orig/Makefile busybox-1.00/Makefile
+--- busybox-1.00.orig/Makefile	2004-10-08 02:45:08.000000000 -0500
++++ busybox-1.00/Makefile	2004-12-01 09:32:53.000000000 -0600
+@@ -130,7 +130,7 @@
+ busybox.links: $(top_srcdir)/applets/busybox.mkll include/config.h $(top_srcdir)/include/applets.h
+ 	- $(SHELL) $^ >$@
+ 
+-install: applets/install.sh busybox busybox.links
++install: $(top_srcdir)/applets/install.sh busybox busybox.links
+ 	$(SHELL) $< $(PREFIX)
+ ifeq ($(strip $(CONFIG_FEATURE_SUID)),y)
+ 	@echo
+@@ -147,7 +147,7 @@
+ 	rm -f $(PREFIX)/bin/busybox
+ 	for i in `cat busybox.links` ; do rm -f $(PREFIX)$$i; done
+ 
+-install-hardlinks: applets/install.sh busybox busybox.links
++install-hardlinks: $(top_srcdir)/applets/install.sh busybox busybox.links
+ 	$(SHELL) $< $(PREFIX) --hardlinks
+ 
+ check: busybox

@@ -1,0 +1,39 @@
+diff -urN alsa-utils-1.0.9.orig/amixer/amixer.c alsa-utils-1.0.9/amixer/amixer.c
+--- alsa-utils-1.0.9.orig/amixer/amixer.c	2005-05-13 12:30:00.000000000 -0500
++++ alsa-utils-1.0.9/amixer/amixer.c	2005-08-11 18:13:21.967390808 -0500
+@@ -184,7 +184,7 @@
+ 	
+ 	if (orange == 0)
+ 		return 0;
+-	return rint((((double)nrange * ((double)val - (double)omin)) + ((double)orange / 2.0)) / ((double)orange + (double)nmin));
++	return (int) ((((double)nrange * ((double)val - (double)omin)) + ((double)orange / 2.0)) / ((double)orange + (double)nmin));
+ }
+ #endif
+ 
+@@ -195,7 +195,7 @@
+ 	
+ 	if (orange == 0)
+ 		return 0;
+-	return rint((((double)nrange * ((double)val - (double)omin)) + ((double)orange / 2.0)) / (double)orange + (double)nmin);
++	return (int) ((((double)nrange * ((double)val - (double)omin)) + ((double)orange / 2.0)) / (double)orange + (double)nmin);
+ }
+ #endif
+ 
+@@ -209,7 +209,7 @@
+ 	if (range == 0)
+ 		return 0;
+ 	val -= min;
+-	tmp = rint((double)val/(double)range * 100);
++	tmp = (int) ((double)val/(double)range * 100);
+ 	return tmp;
+ }
+ 
+@@ -223,7 +223,7 @@
+ 	if (range == 0)
+ 		return 0;
+ 
+-	tmp = rint((double)range * ((double)val*.01)) + min;
++	tmp = (int) ((double)range * ((double)val*.01)) + min;
+ 	return tmp;
+ }
+ 
