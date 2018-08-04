@@ -1,0 +1,11 @@
+cdl_option CYGNUM_REDBOOT_BOOT_SCRIPT_TIMEOUT_RESOLUTION {
+    user_value 100
+};
+
+cdl_option CYGSEM_REDBOOT_FLASH_CONFIG_READONLY_FALLBACK {
+    user_value 0
+};
+
+cdl_option CYGNUM_REDBOOT_FLASH_CONFIG_SIZE {
+    user_value 65536
+};
